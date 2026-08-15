@@ -1,0 +1,575 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Jogo de Carro 3D - Protótipo</title>
+  <style>
+    :root {
+      --asphalt: #14161b;
+      --asphalt-light: #1f232b;
+      --card-bg: #1a1d24;
+      --line-yellow: #f2c245;
+      --accent: #ff5a36;
+      --text-dim: rgba(255,255,255,0.6);
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: var(--asphalt);
+      font-family: 'Segoe UI', Arial, sans-serif;
+    }
+
+    #app {
+      position: relative;
+      width: 100vw;
+      height: 100vh;
+    }
+
+    canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+
+    /* -------------------- HUD do jogo -------------------- */
+
+    #hud {
+      position: absolute;
+      bottom: 24px;
+      left: 24px;
+      color: #ffffff;
+      text-shadow: 0 2px 6px rgba(0,0,0,0.8);
+      user-select: none;
+      pointer-events: none;
+      display: none;
+    }
+
+    #speed {
+      font-size: 42px;
+      font-weight: 700;
+      line-height: 1;
+    }
+
+    #speed-unit {
+      font-size: 16px;
+      font-weight: 400;
+      opacity: 0.8;
+    }
+
+    /* -------------------- Câmbio / conta-giros -------------------- */
+
+    #gear-rpm {
+      margin-top: 10px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+
+    #gear-display {
+      font-size: 30px;
+      font-weight: 800;
+      width: 40px;
+      height: 40px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border: 2px solid rgba(255,255,255,0.55);
+      border-radius: 8px;
+      background: rgba(0,0,0,0.35);
+      transition: color 0.15s ease, border-color 0.15s ease;
+    }
+
+    #gear-display.limiter {
+      color: var(--accent);
+      border-color: var(--accent);
+    }
+
+    #rpm-block {
+      min-width: 150px;
+    }
+
+    #rpm-label-row {
+      display: flex;
+      justify-content: space-between;
+      font-size: 11px;
+      letter-spacing: 0.06em;
+      opacity: 0.75;
+      margin-bottom: 3px;
+    }
+
+    #rpm-bar-track {
+      width: 150px;
+      height: 10px;
+      border-radius: 5px;
+      background: rgba(255,255,255,0.18);
+      overflow: hidden;
+      border: 1px solid rgba(255,255,255,0.25);
+    }
+
+    #rpm-bar-fill {
+      height: 100%;
+      width: 0%;
+      border-radius: 5px 0 0 5px;
+      background: linear-gradient(90deg, #3ddc84, #f2c245 70%, #ff5a36 92%);
+      transition: width 0.05s linear;
+    }
+
+    #rpm-bar-fill.limiter {
+      background: var(--accent);
+      animation: rpm-flash 0.12s steps(2) infinite;
+    }
+
+    @keyframes rpm-flash {
+      0% { opacity: 1; }
+      50% { opacity: 0.55; }
+      100% { opacity: 1; }
+    }
+
+    #controls-hint {
+      position: absolute;
+      bottom: 24px;
+      right: 24px;
+      color: #ffffff;
+      text-shadow: 0 2px 6px rgba(0,0,0,0.8);
+      font-size: 13px;
+      text-align: right;
+      opacity: 0.85;
+      user-select: none;
+      pointer-events: none;
+      display: none;
+    }
+
+    #top-bar {
+      position: absolute;
+      top: 20px;
+      right: 20px;
+      display: none;
+      gap: 10px;
+    }
+
+    /* -------------------- Status do multiplayer -------------------- */
+
+    #mp-status {
+      position: absolute;
+      top: 20px;
+      left: 20px;
+      display: none;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 14px;
+      background: rgba(20, 20, 20, 0.75);
+      border: 1px solid rgba(255,255,255,0.18);
+      border-radius: 8px;
+      color: #ffffff;
+      font-size: 13px;
+      font-weight: 600;
+      backdrop-filter: blur(4px);
+      user-select: none;
+    }
+
+    #mp-status .dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: #d63b3b;
+      transition: background 0.2s ease;
+      flex-shrink: 0;
+    }
+
+    #mp-status.connected .dot {
+      background: #3ddc84;
+    }
+
+    #mp-status.connecting .dot {
+      background: #f2c245;
+      animation: rpm-flash 0.5s steps(2) infinite;
+    }
+
+    #top-bar button {
+      padding: 10px 18px;
+      background: rgba(20, 20, 20, 0.75);
+      color: #ffffff;
+      border: 1px solid rgba(255,255,255,0.25);
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      backdrop-filter: blur(4px);
+    }
+
+    #top-bar button:hover {
+      background: rgba(40, 40, 40, 0.9);
+    }
+
+    #loading {
+      position: absolute;
+      inset: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      color: #ffffff;
+      font-size: 18px;
+      background: var(--asphalt);
+      z-index: 20;
+      letter-spacing: 0.03em;
+    }
+
+    /* -------------------- Menu de seleção de carro -------------------- */
+
+    #car-select {
+      position: absolute;
+      inset: 0;
+      z-index: 30;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: clamp(18px, 4vw, 36px) clamp(12px, 3vw, 20px) clamp(26px, 6vw, 42px);
+      background:
+        repeating-linear-gradient(
+          135deg,
+          rgba(255,255,255,0.025) 0px,
+          rgba(255,255,255,0.025) 2px,
+          transparent 2px,
+          transparent 26px
+        ),
+        radial-gradient(circle at 50% 20%, var(--asphalt-light) 0%, var(--asphalt) 65%);
+      text-align: center;
+      overflow-y: auto;
+    }
+
+    #car-select .eyebrow {
+      color: var(--line-yellow);
+      font-size: clamp(10px, 1.8vw, 13px);
+      font-weight: 700;
+      letter-spacing: 0.22em;
+      text-transform: uppercase;
+      margin: 0 0 10px 0;
+    }
+
+    #car-select h1 {
+      color: #ffffff;
+      font-size: clamp(28px, 5vw, 46px);
+      font-weight: 800;
+      letter-spacing: 0.01em;
+      margin: 0 0 8px 0;
+    }
+
+    #car-select p.subtitle {
+      color: var(--text-dim);
+      font-size: clamp(13px, 2vw, 15px);
+      margin: 0 0 clamp(22px, 5vw, 40px) 0;
+      max-width: 580px;
+      line-height: 1.5;
+    }
+
+    #car-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: clamp(14px, 2.8vw, 24px);
+      justify-content: center;
+      max-width: 1000px;
+      width: 100%;
+    }
+
+    .car-card {
+      width: min(100%, 320px);
+      background: var(--card-bg);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 14px;
+      overflow: hidden;
+      text-align: left;
+      transition: transform 0.18s ease, border-color 0.18s ease;
+      cursor: pointer;
+      flex: 1 1 280px;
+      max-width: 320px;
+    }
+
+    .car-card:hover,
+    .car-card:focus-visible {
+      transform: translateY(-4px);
+      border-color: var(--line-yellow);
+    }
+
+    .car-card .thumb {
+      width: 100%;
+      height: clamp(150px, 22vw, 190px);
+      background: #0e1014;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
+
+    .car-card .thumb img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    .car-card .thumb svg {
+      width: 78%;
+      height: auto;
+      max-height: 100%;
+    }
+
+    .car-card .info {
+      padding: 18px 20px 22px;
+    }
+
+    .car-card .info h2 {
+      color: #ffffff;
+      font-size: clamp(17px, 2vw, 19px);
+      font-weight: 700;
+      margin: 0 0 4px 0;
+    }
+
+    .car-card .info p {
+      color: var(--text-dim);
+      font-size: clamp(12px, 1.8vw, 13px);
+      margin: 0 0 16px 0;
+      line-height: 1.4;
+    }
+
+    .car-card .select-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--accent);
+      color: #ffffff;
+      border: none;
+      border-radius: 8px;
+      padding: 10px 16px;
+      font-size: clamp(13px, 2vw, 14px);
+      font-weight: 700;
+      cursor: pointer;
+      width: 100%;
+      justify-content: center;
+      min-height: 44px;
+    }
+
+    .car-card .select-btn:hover {
+      filter: brightness(1.08);
+    }
+
+    #car-select .footnote {
+      margin-top: clamp(20px, 4vw, 32px);
+      color: var(--text-dim);
+      font-size: clamp(11px, 1.7vw, 12px);
+      line-height: 1.5;
+      max-width: 560px;
+    }
+
+    @media (max-width: 720px) {
+      #car-select {
+        justify-content: flex-start;
+        padding-top: 24px;
+      }
+
+      #car-grid {
+        flex-direction: column;
+        align-items: stretch;
+      }
+
+      .car-card {
+        width: 100%;
+        max-width: 100%;
+      }
+
+      .car-card .info {
+        padding: 16px 16px 18px;
+      }
+
+      .car-card .select-btn {
+        min-height: 48px;
+      }
+    }
+
+    /* -------------------- Controles touch -------------------- */
+
+    #touch-controls {
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: max(28px, env(safe-area-inset-bottom) + 18px);
+      display: none;
+      align-items: flex-end;
+      justify-content: space-between;
+      padding: 0 18px 0;
+      z-index: 25;
+      pointer-events: none;
+    }
+
+    #touch-controls.visible {
+      display: flex;
+    }
+
+    .touch-cluster {
+      display: flex;
+      flex-direction: row;
+      align-items: center;
+      gap: 12px;
+      pointer-events: none;
+    }
+
+    .touch-cluster-left {
+      margin-left: 2px;
+    }
+
+    .touch-cluster-right {
+      margin-right: 2px;
+    }
+
+    .touch-btn {
+      pointer-events: auto;
+      user-select: none;
+      -webkit-user-select: none;
+      touch-action: none;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: clamp(72px, 18vw, 92px);
+      height: clamp(72px, 18vw, 92px);
+      border: 1px solid rgba(255,255,255,0.15);
+      border-radius: 22px;
+      background: linear-gradient(180deg, rgba(58, 65, 75, 0.95), rgba(18, 22, 30, 0.95));
+      color: #ffffff;
+      font-weight: 800;
+      font-size: clamp(1.9rem, 5vw, 2.3rem);
+      box-shadow:
+        inset 0 1px 0 rgba(255,255,255,0.18),
+        inset 0 -3px 0 rgba(0,0,0,0.24),
+        0 10px 24px rgba(0,0,0,0.28);
+      backdrop-filter: blur(4px);
+      transition: transform 0.08s ease, background 0.08s ease, border-color 0.08s ease,
+        box-shadow 0.08s ease;
+    }
+
+    .touch-btn.active {
+      background: linear-gradient(180deg, rgba(255,125,92,0.98), rgba(255, 90, 54, 0.96));
+      border-color: rgba(255,255,255,0.5);
+      box-shadow:
+        inset 0 1px 0 rgba(255,255,255,0.2),
+        inset 0 -2px 0 rgba(133,42,20,0.6),
+        0 6px 18px rgba(255, 90, 54, 0.38);
+      transform: translateY(2px) scale(0.98);
+    }
+
+    @media (max-width: 480px) {
+      #touch-controls {
+        padding: 0 12px 0;
+        bottom: max(28px, env(safe-area-inset-bottom) + 18px);
+      }
+
+      .touch-cluster {
+        gap: 8px;
+      }
+
+      .touch-btn {
+        width: 72px;
+        height: 72px;
+        border-radius: 18px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div id="car-select">
+      <p class="eyebrow">Protótipo de direção 3D</p>
+      <h1>Escolha seu carro</h1>
+      <p class="subtitle">Selecione um veículo para começar a dirigir pelo cenário</p>
+
+      <div id="car-grid">
+        <div class="car-card" data-car="mustang" tabindex="0" role="button">
+          <div class="thumb">
+            <img src="./assets/previews/mustang.jpg" alt="Ford Mustang Boss 302" />
+          </div>
+          <div class="info">
+            <h2>Mustang Boss 302</h2>
+            <p>Esportivo, ágil e feito para acelerar em linha reta.</p>
+            <button class="select-btn" type="button">Selecionar</button>
+          </div>
+        </div>
+
+        <div class="car-card" data-car="palio" tabindex="0" role="button">
+          <div class="thumb">
+            <svg viewBox="0 0 200 100" xmlns="http://www.w3.org/2000/svg">
+              <path d="M10 68 C10 55 25 52 40 50 L55 34 C60 28 70 24 82 24 L130 24 C142 24 150 30 156 40 L168 50 C182 52 190 58 190 68 L190 76 L10 76 Z"
+                    fill="#2b3a66" stroke="#1a2440" stroke-width="2"/>
+              <path d="M62 48 L72 30 C75 27 80 25 86 25 L124 25 C130 25 135 28 138 32 L150 48 Z"
+                    fill="#3f5490" stroke="#1a2440" stroke-width="1.5"/>
+              <circle cx="52" cy="78" r="15" fill="#111318" stroke="#3f5490" stroke-width="3"/>
+              <circle cx="150" cy="78" r="15" fill="#111318" stroke="#3f5490" stroke-width="3"/>
+              <circle cx="52" cy="78" r="5" fill="#3f5490"/>
+              <circle cx="150" cy="78" r="5" fill="#3f5490"/>
+            </svg>
+          </div>
+          <div class="info">
+            <h2>Fiat Palio</h2>
+            <p>Compacto e equilibrado, ótimo para manobrar pelo cenário.</p>
+            <button class="select-btn" type="button">Selecionar</button>
+          </div>
+        </div>
+      </div>
+
+      <p class="footnote">Dica: use W A S D para dirigir e arraste o mouse para olhar ao redor</p>
+    </div>
+
+    <div id="loading">Carregando modelo do carro...</div>
+
+    <div id="mp-status">
+      <span class="dot"></span>
+      <span id="mp-status-text">Conectando...</span>
+    </div>
+
+    <div id="hud">
+      <span id="speed">0</span><span id="speed-unit"> km/h</span>
+      <div id="gear-rpm">
+        <div id="gear-display">1</div>
+        <div id="rpm-block">
+          <div id="rpm-label-row"><span>RPM</span><span id="rpm-value">1000</span></div>
+          <div id="rpm-bar-track">
+            <div id="rpm-bar-fill"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div id="controls-hint">
+      W acelerar &nbsp;|&nbsp; S ré/frear &nbsp;|&nbsp; A esquerda &nbsp;|&nbsp; D direita &nbsp;|&nbsp; SPACE freio de mão &nbsp;|&nbsp; E sobe marcha &nbsp;|&nbsp; Q reduz marcha
+    </div>
+    <div id="touch-controls" aria-label="Controles de toque">
+      <div class="touch-cluster touch-cluster-left" aria-label="Direção">
+        <button class="touch-btn" type="button" data-key="a" aria-label="Virar para esquerda">←</button>
+        <button class="touch-btn" type="button" data-key="d" aria-label="Virar para direita">→</button>
+      </div>
+      <div class="touch-cluster touch-cluster-right" aria-label="Aceleração e freio">
+        <button class="touch-btn" type="button" data-key="w" aria-label="Acelerar">↑</button>
+        <button class="touch-btn" type="button" data-key="s" aria-label="Frear ou ré">↓</button>
+      </div>
+    </div>
+    <div id="top-bar">
+      <button id="change-car-btn">Trocar carro</button>
+      <button id="reset-btn">Reiniciar posição</button>
+    </div>
+  </div>
+
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+      }
+    }
+  </script>
+
+  <script type="module" src="./src/main.js"></script>
+</body>
+</html>
