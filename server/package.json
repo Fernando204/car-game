@@ -1,0 +1,13 @@
+{
+  "name": "jogo-carro-multiplayer-server",
+  "version": "1.0.0",
+  "description": "Servidor único (HTTP + WebSocket) que serve o jogo de carro 3D e sincroniza os jogadores",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}
