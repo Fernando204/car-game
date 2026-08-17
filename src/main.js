@@ -643,7 +643,7 @@ const CAR_PHYSICS = {
   // máxima. Em baixa velocidade a direção é sempre mais responsiva (ver
   // speedFactor dentro de updateCar); em alta velocidade ela se aproxima
   // deste valor, tornando curvas fechadas mais difíceis.
-  steeringStrength: 2.4,
+  steeringStrength: 3.6,
 
   // --- Aderência (grip) ---
   // Taxa (1/s) com que a velocidade LATERAL é "puxada" de volta a zero em
@@ -675,6 +675,13 @@ const CAR_PHYSICS = {
   // Desaceleração natural da velocidade longitudinal quando nem W nem S
   // estão pressionados (equivalente ao antigo "friction").
   rollingResistance: 6,
+
+  // --- Marcas de pneu no esterço máximo ---
+  // Quando o volante (ou A/D no teclado) está girado no limite E o carro
+  // está em movimento, os pneus deixam marca mesmo sem o freio de mão —
+  // simula o pneu "raspando" no esterço máximo.
+  maxSteerSkidThreshold: 0.92, // fração (0..1) do esterço máximo a partir da qual já deixa marca
+  maxSteerSkidMinSpeed: 3, // unid/s mínimos para considerar que há marca (evita marca parado)
 };
 
 const loader = new GLTFLoader();
@@ -847,6 +854,164 @@ changeCarBtn.addEventListener('click', returnToCarSelect);
 const keys = { w: false, a: false, s: false, d: false, space: false };
 const touchControlsEl = document.getElementById('touch-controls');
 const touchButtonEls = Array.from(document.querySelectorAll('[data-key]'));
+const controlsBtn = document.getElementById('controls-btn');
+const controlsPanelEl = document.getElementById('controls-panel');
+const gamepadDeviceNameEl = document.getElementById('gamepad-device-name');
+const gamepadWheelLabelEl = document.getElementById('gamepad-wheel-label');
+const gamepadThrottleLabelEl = document.getElementById('gamepad-throttle-label');
+const gamepadBrakeLabelEl = document.getElementById('gamepad-brake-label');
+const gamepadShiftUpLabelEl = document.getElementById('gamepad-shiftup-label');
+const gamepadShiftDownLabelEl = document.getElementById('gamepad-shiftdown-label');
+const wheelMeterEl = document.getElementById('wheel-meter');
+const throttleMeterEl = document.getElementById('throttle-meter');
+const brakeMeterEl = document.getElementById('brake-meter');
+const wheelMeterValueEl = document.getElementById('wheel-meter-value');
+const throttleMeterValueEl = document.getElementById('throttle-meter-value');
+const brakeMeterValueEl = document.getElementById('brake-meter-value');
+const gamepadDebugPanelEl = document.getElementById('gamepad-debug-panel');
+const gamepadDebugGridEl = document.getElementById('gamepad-debug-grid');
+const toggleGamepadDebugBtn = document.getElementById('toggle-gamepad-debug-btn');
+
+const GAMEPAD_STORAGE_KEY = 'car-game-gamepad-config-v1';
+const GAMEPAD_DEBUG = false;
+const DEFAULT_GAMEPAD_CONFIG = {
+  deadzone: 0.05,
+  steeringSensitivity: 1.8,
+  steeringAxis: null,
+  throttleAxis: null,
+  brakeAxis: null,
+  shiftUpButton: null,
+  shiftDownButton: null,
+};
+
+const controls = {
+  steering: 0,
+  throttle: 0,
+  brake: 0,
+  handbrake: false,
+  shiftUp: false,
+  shiftDown: false,
+  gamepadActive: false,
+};
+
+let gamepadConfig = { ...DEFAULT_GAMEPAD_CONFIG };
+let calibrationTarget = null;
+let calibrationSnapshot = null;
+let previousGamepadShiftUp = false;
+let previousGamepadShiftDown = false;
+const gamepadAxisRange = {};
+
+// Cache da inferência automática de eixos/botões (usada como fallback antes
+// de o jogador calibrar manualmente). É recalculada só quando o gamepad
+// conectado muda — nunca a cada frame — porque antes disso o "botão padrão"
+// de troca de marcha ficava mudando conforme o que estivesse sendo
+// pressionado naquele instante, causando trocas de marcha erráticas.
+let cachedInferredDefaults = null;
+let cachedInferredPadId = null;
+
+function logRawGamepadState(label = 'GAMEPAD_RAW') {
+  if (!GAMEPAD_DEBUG) return;
+
+  const pad = getConnectedGamepad();
+  if (!pad) {
+    console.log(label, 'nenhum gamepad conectado');
+    return;
+  }
+
+  const axes = Array.from(pad.axes ?? []).map((value) => Number(value.toFixed(3)));
+  const buttons = Array.from(pad.buttons ?? []).map((button, index) => ({
+    index,
+    pressed: !!button?.pressed,
+    value: Number((button?.value ?? 0).toFixed(3)),
+  }));
+
+  console.log(label, { id: pad.id, axes, buttons });
+}
+
+function normalizeAxisToUnit(index, value, deadzone) {
+  if (index === null || index === undefined) return 0;
+
+  const range = gamepadAxisRange[index] ?? (gamepadAxisRange[index] = { min: value, max: value });
+  if (value < range.min) range.min = value;
+  if (value > range.max) range.max = value;
+
+  const span = range.max - range.min;
+  if (span < 0.05) return 0;
+
+  const normalized = (value - range.min) / span;
+  if (normalized < deadzone) return 0;
+  return clamp(normalized, 0, 1);
+}
+
+function sanitizeGamepadConfig(config) {
+  const next = { ...DEFAULT_GAMEPAD_CONFIG, ...config };
+  const usedAxisIndexes = new Set();
+
+  ['steeringAxis', 'throttleAxis', 'brakeAxis'].forEach((key) => {
+    const value = next[key];
+    if (value === null || value === undefined) return;
+    if (usedAxisIndexes.has(value)) {
+      next[key] = null;
+      return;
+    }
+    usedAxisIndexes.add(value);
+  });
+
+  const usedButtonIndexes = new Set();
+  ['shiftUpButton', 'shiftDownButton'].forEach((key) => {
+    const value = next[key];
+    if (value === null || value === undefined) return;
+    if (usedButtonIndexes.has(value)) {
+      next[key] = null;
+      return;
+    }
+    usedButtonIndexes.add(value);
+  });
+
+  return next;
+}
+
+function applyUniqueButtonAssignment(targetKey, value) {
+  const next = { ...gamepadConfig };
+  if (targetKey === 'shiftUpButton') {
+    if (value === next.shiftDownButton) {
+      next.shiftDownButton = null;
+    }
+    next.shiftUpButton = value;
+  }
+
+  if (targetKey === 'shiftDownButton') {
+    if (value === next.shiftUpButton) {
+      next.shiftUpButton = null;
+    }
+    next.shiftDownButton = value;
+  }
+
+  gamepadConfig = sanitizeGamepadConfig(next);
+}
+
+function readGamepadConfig() {
+  try {
+    const raw = localStorage.getItem(GAMEPAD_STORAGE_KEY);
+    if (!raw) return { ...DEFAULT_GAMEPAD_CONFIG };
+
+    const parsed = JSON.parse(raw);
+    const cleaned = sanitizeGamepadConfig(parsed);
+    if (JSON.stringify(cleaned) !== JSON.stringify({ ...DEFAULT_GAMEPAD_CONFIG, ...parsed })) {
+      localStorage.removeItem(GAMEPAD_STORAGE_KEY);
+    }
+    return cleaned;
+  } catch {
+    return { ...DEFAULT_GAMEPAD_CONFIG };
+  }
+}
+
+function saveGamepadConfig() {
+  gamepadConfig = sanitizeGamepadConfig(gamepadConfig);
+  localStorage.setItem(GAMEPAD_STORAGE_KEY, JSON.stringify(gamepadConfig));
+}
+
+gamepadConfig = sanitizeGamepadConfig(readGamepadConfig());
 
 const isTouchDevice = (() => {
   if (navigator.maxTouchPoints > 0) return true;
@@ -921,6 +1086,468 @@ function updateTouchControlsVisibility() {
   if (!touchControlsEl) return;
   touchControlsEl.classList.toggle('visible', isTouchDevice && isGameStarted);
 }
+
+function getConnectedGamepad() {
+  if (!navigator.getGamepads) return null;
+  const pads = navigator.getGamepads();
+  for (const pad of pads) {
+    if (pad) return pad;
+  }
+  return null;
+}
+
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function formatAxisValue(value) {
+  return Number(Math.abs(value)).toFixed(2);
+}
+
+function setControlButtonState() {
+  if (!controlsBtn) return;
+  const pad = getConnectedGamepad();
+  controlsBtn.textContent = pad ? 'CONTROLES ✓' : 'CONTROLES';
+}
+
+function getButtonActivity(button) {
+  if (!button) return 0;
+  const value = Number(button.value ?? 0);
+  const pressed = !!button.pressed;
+  return Math.max(value, pressed ? 1 : 0);
+}
+
+function toggleGamepadDebugPanel(forceState) {
+  if (!gamepadDebugPanelEl) return;
+
+  const shouldOpen = typeof forceState === 'boolean' ? forceState : !gamepadDebugPanelEl.classList.contains('visible');
+  gamepadDebugPanelEl.classList.toggle('visible', shouldOpen);
+  if (shouldOpen) {
+    updateGamepadDebugPanel();
+  }
+}
+
+function updateGamepadDebugPanel() {
+  const pad = getConnectedGamepad();
+  if (!gamepadDebugPanelEl || !gamepadDebugGridEl) return;
+
+  if (!gamepadDebugPanelEl.classList.contains('visible')) {
+    if (!pad) {
+      gamepadDebugGridEl.innerHTML = '';
+    }
+    return;
+  }
+
+  if (!pad) {
+    gamepadDebugGridEl.innerHTML = '<div class="debug-item"><span>status</span><strong>sem pad</strong></div>';
+    return;
+  }
+
+  const axisItems = (pad.axes ?? []).map((value, index) => {
+    const displayValue = Number((value ?? 0).toFixed(3));
+    const status = Math.abs(displayValue) < 0.1 ? 'center' : displayValue >= 0 ? 'pos' : 'neg';
+    return `<div class="debug-item"><span>A${index}</span><strong>${displayValue}</strong><small style="opacity:0.7;">${status}</small></div>`;
+  });
+
+  const buttonItems = (pad.buttons ?? []).slice(0, 8).map((button, index) => {
+    const value = getButtonActivity(button);
+    const state = value > 0.1 ? 'on' : 'off';
+    return `<div class="debug-item"><span>B${index}</span><strong>${Number(value.toFixed(3))}</strong><small style="opacity:0.7;">${state}</small></div>`;
+  });
+
+  gamepadDebugGridEl.innerHTML = [...axisItems, ...buttonItems].join('');
+}
+
+function inferGamepadDefaults(pad) {
+  const defaultConfig = { ...DEFAULT_GAMEPAD_CONFIG };
+  if (!pad) return defaultConfig;
+
+  const axes = (pad.axes ?? []).map((value, index) => ({ index, value, abs: Math.abs(value) }));
+  const centeredAxes = axes.filter((axis) => axis.abs < 0.2).sort((a, b) => a.abs - b.abs);
+  if (centeredAxes[0]) defaultConfig.steeringAxis = centeredAxes[0].index;
+
+  const extremes = axes
+    .filter((axis) => axis.abs >= 0.2 && axis.index !== defaultConfig.steeringAxis)
+    .sort((a, b) => b.abs - a.abs);
+
+  if (extremes[0]) defaultConfig.throttleAxis = extremes[0].index;
+  if (extremes[1]) defaultConfig.brakeAxis = extremes[1].index;
+
+  const buttons = pad.buttons ?? [];
+  const activeButtons = buttons
+    .map((button, index) => ({ index, value: Number(button?.value ?? 0), pressed: !!button?.pressed }))
+    .filter((button) => button.value > 0.2 || button.pressed)
+    .sort((a, b) => b.value - a.value);
+
+  if (activeButtons[0]) defaultConfig.shiftUpButton = activeButtons[0].index;
+  if (activeButtons[1]) defaultConfig.shiftDownButton = activeButtons[1].index;
+
+  return defaultConfig;
+}
+
+function getActiveGamepadConfig(pad) {
+  if (!pad) return { ...DEFAULT_GAMEPAD_CONFIG };
+
+  // Só recalcula a inferência automática quando o gamepad conectado muda
+  // (id diferente) ou ainda não foi inferida — nunca a cada frame. Antes
+  // disso, "qual botão está mais pressionado agora" era reavaliado 60x por
+  // segundo, então o botão "padrão" de troca de marcha mudava conforme
+  // qualquer botão que estivesse sendo segurado naquele instante, causando
+  // trocas de marcha erráticas antes da calibração manual.
+  if (cachedInferredPadId !== pad.id || !cachedInferredDefaults) {
+    cachedInferredDefaults = inferGamepadDefaults(pad);
+    cachedInferredPadId = pad.id;
+  }
+
+  const fallback = cachedInferredDefaults;
+  const merged = {
+    ...DEFAULT_GAMEPAD_CONFIG,
+    ...fallback,
+    ...gamepadConfig,
+    steeringAxis: gamepadConfig.steeringAxis ?? fallback.steeringAxis,
+    throttleAxis: gamepadConfig.throttleAxis ?? fallback.throttleAxis,
+    brakeAxis: gamepadConfig.brakeAxis ?? fallback.brakeAxis,
+    shiftUpButton: gamepadConfig.shiftUpButton ?? fallback.shiftUpButton,
+    shiftDownButton: gamepadConfig.shiftDownButton ?? fallback.shiftDownButton,
+  };
+  return sanitizeGamepadConfig(merged);
+}
+
+function updateControlsPanelUi() {
+  const pad = getConnectedGamepad();
+  const activeConfig = getActiveGamepadConfig(pad);
+  const name = pad ? pad.id : 'Nenhum volante detectado';
+  gamepadDeviceNameEl.textContent = name;
+
+  gamepadWheelLabelEl.textContent =
+    activeConfig.steeringAxis !== null ? `Axis ${activeConfig.steeringAxis}` : 'Aguardando movimento...';
+  gamepadThrottleLabelEl.textContent =
+    activeConfig.throttleAxis !== null ? `Axis ${activeConfig.throttleAxis}` : 'Aguardando movimento...';
+  gamepadBrakeLabelEl.textContent =
+    activeConfig.brakeAxis !== null ? `Axis ${activeConfig.brakeAxis}` : 'Aguardando movimento...';
+  gamepadShiftUpLabelEl.textContent =
+    activeConfig.shiftUpButton !== null ? `Botão ${activeConfig.shiftUpButton}` : 'Aguardando botão...';
+  gamepadShiftDownLabelEl.textContent =
+    activeConfig.shiftDownButton !== null ? `Botão ${activeConfig.shiftDownButton}` : 'Aguardando botão...';
+
+  if (!pad) {
+    wheelMeterEl.style.width = '0%';
+    throttleMeterEl.style.width = '0%';
+    brakeMeterEl.style.width = '0%';
+    wheelMeterValueEl.textContent = '0.00';
+    throttleMeterValueEl.textContent = '0.00';
+    brakeMeterValueEl.textContent = '0.00';
+    return;
+  }
+
+  const wheelValue = activeConfig.steeringAxis !== null ? pad.axes[activeConfig.steeringAxis] ?? 0 : 0;
+  const throttleValue = activeConfig.throttleAxis !== null
+    ? normalizeAxisToUnit(activeConfig.throttleAxis, pad.axes[activeConfig.throttleAxis] ?? 0, gamepadConfig.deadzone ?? DEFAULT_GAMEPAD_CONFIG.deadzone)
+    : 0;
+  const brakeValue = activeConfig.brakeAxis !== null
+    ? normalizeAxisToUnit(activeConfig.brakeAxis, pad.axes[activeConfig.brakeAxis] ?? 0, gamepadConfig.deadzone ?? DEFAULT_GAMEPAD_CONFIG.deadzone)
+    : 0;
+
+  const wheelNorm = Math.abs(wheelValue) < (gamepadConfig.deadzone ?? DEFAULT_GAMEPAD_CONFIG.deadzone) ? 0 : wheelValue;
+  wheelMeterEl.style.width = `${clamp(Math.abs(wheelNorm) * 100, 0, 100)}%`;
+  wheelMeterValueEl.textContent = Number(Math.abs(wheelNorm)).toFixed(2);
+
+  throttleMeterEl.style.width = `${clamp(throttleValue * 100, 0, 100)}%`;
+  throttleMeterValueEl.textContent = Number(throttleValue).toFixed(2);
+
+  brakeMeterEl.style.width = `${clamp(brakeValue * 100, 0, 100)}%`;
+  brakeMeterValueEl.textContent = Number(brakeValue).toFixed(2);
+}
+
+function updateGamepadInput() {
+  const pad = getConnectedGamepad();
+  if (!pad || !gamepadConfig) {
+    controls.gamepadActive = false;
+    controls.steering = 0;
+    controls.throttle = 0;
+    controls.brake = 0;
+    controls.handbrake = false;
+    controls.shiftUp = false;
+    controls.shiftDown = false;
+    previousGamepadShiftUp = false;
+    previousGamepadShiftDown = false;
+    setControlButtonState();
+    if (controlsPanelEl?.classList.contains('visible')) {
+      updateControlsPanelUi();
+    }
+    return;
+  }
+
+  const activeConfig = getActiveGamepadConfig(pad);
+  controls.gamepadActive = true;
+
+  const wheelAxis = activeConfig.steeringAxis !== null ? (pad.axes[activeConfig.steeringAxis] ?? 0) : 0;
+  const throttleAxis = activeConfig.throttleAxis !== null ? (pad.axes[activeConfig.throttleAxis] ?? 0) : 0;
+  const brakeAxis = activeConfig.brakeAxis !== null ? (pad.axes[activeConfig.brakeAxis] ?? 0) : 0;
+
+  const deadzone = gamepadConfig.deadzone ?? DEFAULT_GAMEPAD_CONFIG.deadzone;
+  const normalizedWheel = Math.abs(wheelAxis) < deadzone ? 0 : wheelAxis * (gamepadConfig.steeringSensitivity ?? DEFAULT_GAMEPAD_CONFIG.steeringSensitivity);
+  const normalizedThrottle = activeConfig.throttleAxis !== null
+    ? normalizeAxisToUnit(activeConfig.throttleAxis, throttleAxis, deadzone)
+    : 0;
+  const normalizedBrake = activeConfig.brakeAxis !== null
+    ? normalizeAxisToUnit(activeConfig.brakeAxis, brakeAxis, deadzone)
+    : 0;
+
+  controls.steering = clamp(normalizedWheel, -1, 1);
+  controls.throttle = normalizedThrottle;
+  controls.brake = normalizedBrake;
+  controls.handbrake = keys.space;
+
+  const shiftUpButton = activeConfig.shiftUpButton !== null ? pad.buttons[activeConfig.shiftUpButton] : null;
+  const shiftDownButton = activeConfig.shiftDownButton !== null ? pad.buttons[activeConfig.shiftDownButton] : null;
+  const shiftUpValue = shiftUpButton ? getButtonActivity(shiftUpButton) : 0;
+  const shiftDownValue = shiftDownButton ? getButtonActivity(shiftDownButton) : 0;
+
+  controls.shiftUp = shiftUpValue > 0.05;
+  controls.shiftDown = shiftDownValue > 0.05;
+
+  if (GAMEPAD_DEBUG && (Math.abs(wheelAxis) > 0.05 || Math.abs(throttleAxis) > 0.05 || Math.abs(brakeAxis) > 0.05 || controls.shiftUp || controls.shiftDown)) {
+    console.log('GAMEPAD', {
+      id: pad.id,
+      steeringAxis: activeConfig.steeringAxis,
+      steeringValue: wheelAxis,
+      throttleAxis: activeConfig.throttleAxis,
+      throttleValue: throttleAxis,
+      brakeAxis: activeConfig.brakeAxis,
+      brakeValue: brakeAxis,
+      shiftUp: controls.shiftUp,
+      shiftDown: controls.shiftDown,
+      axes: Array.from(pad.axes ?? []).map((value) => Number(value.toFixed(3))),
+      buttons: Array.from(pad.buttons ?? []).map((button, index) => ({ index, value: Number((button?.value ?? 0).toFixed(3)), pressed: !!button?.pressed }))
+    });
+  }
+
+  updateGamepadDebugPanel();
+  setControlButtonState();
+  if (controlsPanelEl?.classList.contains('visible')) {
+    updateControlsPanelUi();
+  }
+}
+
+function findSignificantAxis(pad, target = 'steering') {
+  const axes = pad.axes ?? [];
+  const snapshot = calibrationSnapshot?.axes ?? [];
+  let bestIndex = null;
+  let bestDelta = 0;
+
+  for (let i = 0; i < axes.length; i++) {
+    const current = Number(axes[i] ?? 0);
+    const initial = Number(snapshot[i] ?? 0);
+    const delta = Math.abs(current - initial);
+
+    if (target === 'steering') {
+      if (delta > 0.03 && Math.abs(current) > 0.05 && delta > bestDelta) {
+        bestDelta = delta;
+        bestIndex = i;
+      }
+      continue;
+    }
+
+    if (target === 'throttle') {
+      if (current > 0.05 && (current - initial) > bestDelta) {
+        bestDelta = current - initial;
+        bestIndex = i;
+      }
+      continue;
+    }
+
+    if (target === 'brake') {
+      const magnitude = Math.abs(current);
+      if (magnitude > 0.05 && delta > bestDelta) {
+        bestDelta = delta;
+        bestIndex = i;
+      }
+    }
+  }
+
+  return bestIndex;
+}
+
+function findPressedButton(pad) {
+  const buttons = pad.buttons ?? [];
+  const snapshot = calibrationSnapshot?.buttons ?? [];
+  let bestIndex = null;
+  let bestValue = 0;
+
+  for (let i = 0; i < buttons.length; i++) {
+    const btn = buttons[i] ?? {};
+    const value = Math.max(Number(btn.value ?? 0), btn.pressed ? 1 : 0);
+    const initial = Number(snapshot[i] ?? 0);
+    // Ignora botões que já estavam ativos no momento em que a calibração
+    // começou — evita capturar por engano um botão "grudado"/já pressionado
+    // em vez do que o jogador realmente apertou agora.
+    if (initial > 0.5) continue;
+    if (value > bestValue) {
+      bestValue = value;
+      bestIndex = i;
+    }
+  }
+
+  return bestValue > 0.05 ? bestIndex : null;
+}
+
+function beginCalibration(target) {
+  calibrationTarget = target;
+  const pad = getConnectedGamepad();
+  calibrationSnapshot = pad ? {
+    axes: Array.from(pad.axes ?? []),
+    buttons: Array.from(pad.buttons ?? []).map((button) => Number(button?.value ?? 0) || (button?.pressed ? 1 : 0))
+  } : null;
+
+  if (GAMEPAD_DEBUG) {
+    console.log('CALIBRANDO', { target, pad: pad ? pad.id : 'nenhum', snapshot: calibrationSnapshot });
+    logRawGamepadState('GAMEPAD_CALIBRATION_START');
+  }
+
+  if (target === 'steering') {
+    gamepadWheelLabelEl.textContent = 'Aguardando movimento...';
+  } else if (target === 'throttle') {
+    gamepadThrottleLabelEl.textContent = 'Aguardando movimento...';
+  } else if (target === 'brake') {
+    gamepadBrakeLabelEl.textContent = 'Aguardando movimento...';
+  } else if (target === 'shiftUp') {
+    gamepadShiftUpLabelEl.textContent = 'Aguardando botão...';
+  } else if (target === 'shiftDown') {
+    gamepadShiftDownLabelEl.textContent = 'Aguardando botão...';
+  }
+}
+
+function applyCalibrationValue(target, value) {
+  if (target === 'steering') gamepadConfig.steeringAxis = value;
+  if (target === 'throttle') gamepadConfig.throttleAxis = value;
+  if (target === 'brake') gamepadConfig.brakeAxis = value;
+  if (target === 'shiftUp') applyUniqueButtonAssignment('shiftUpButton', value);
+  if (target === 'shiftDown') applyUniqueButtonAssignment('shiftDownButton', value);
+
+  const axisUsed = new Set();
+  ['steeringAxis', 'throttleAxis', 'brakeAxis'].forEach((key) => {
+    const currentValue = gamepadConfig[key];
+    if (currentValue === null || currentValue === undefined) return;
+    if (axisUsed.has(currentValue)) {
+      gamepadConfig[key] = null;
+      return;
+    }
+    axisUsed.add(currentValue);
+  });
+
+  const buttonUsed = new Set();
+  ['shiftUpButton', 'shiftDownButton'].forEach((key) => {
+    const currentValue = gamepadConfig[key];
+    if (currentValue === null || currentValue === undefined) return;
+    if (buttonUsed.has(currentValue)) {
+      gamepadConfig[key] = null;
+      return;
+    }
+    buttonUsed.add(currentValue);
+  });
+
+  calibrationTarget = null;
+  saveGamepadConfig();
+  updateControlsPanelUi();
+}
+
+function updateCalibration() {
+  if (!calibrationTarget) return;
+  const pad = getConnectedGamepad();
+  if (!pad) return;
+
+  if (GAMEPAD_DEBUG) {
+    console.log('CALIBRATION_LIVE', {
+      target: calibrationTarget,
+      axes: Array.from(pad.axes ?? []).map((value) => Number(value.toFixed(3))),
+      buttons: Array.from(pad.buttons ?? []).map((button, index) => ({
+        index,
+        pressed: !!button?.pressed,
+        value: Number((button?.value ?? 0).toFixed(3)),
+      })),
+    });
+  }
+
+  if (calibrationTarget === 'steering' || calibrationTarget === 'throttle' || calibrationTarget === 'brake') {
+    const axisIdx = findSignificantAxis(pad, calibrationTarget);
+    if (axisIdx !== null) {
+      if (GAMEPAD_DEBUG) {
+        console.log('CALIBRACAO_AXIS', {
+          target: calibrationTarget,
+          axisIndex: axisIdx,
+          value: pad.axes[axisIdx],
+          allAxes: Array.from(pad.axes ?? []).map((value) => Number(value.toFixed(3))),
+        });
+      }
+      applyCalibrationValue(calibrationTarget, axisIdx);
+    }
+    return;
+  }
+
+  const buttonIdx = findPressedButton(pad);
+  if (buttonIdx !== null) {
+    if (GAMEPAD_DEBUG) {
+      console.log('CALIBRACAO_BUTTON', {
+        target: calibrationTarget,
+        buttonIndex: buttonIdx,
+        value: pad.buttons[buttonIdx]?.value,
+        pressed: pad.buttons[buttonIdx]?.pressed,
+        allButtons: Array.from(pad.buttons ?? []).map((button, index) => ({
+          index,
+          pressed: !!button?.pressed,
+          value: Number((button?.value ?? 0).toFixed(3)),
+        })),
+      });
+    }
+    applyCalibrationValue(calibrationTarget, buttonIdx);
+  }
+}
+
+if (controlsBtn) {
+  controlsBtn.addEventListener('click', () => {
+    controlsPanelEl.classList.toggle('visible');
+    updateControlsPanelUi();
+  });
+}
+
+if (controlsPanelEl) {
+  controlsPanelEl.addEventListener('click', (event) => {
+    if (event.target === controlsPanelEl) {
+      controlsPanelEl.classList.remove('visible');
+    }
+  });
+}
+
+document.getElementById('configure-wheel-btn')?.addEventListener('click', () => beginCalibration('steering'));
+document.getElementById('configure-throttle-btn')?.addEventListener('click', () => beginCalibration('throttle'));
+document.getElementById('configure-brake-btn')?.addEventListener('click', () => beginCalibration('brake'));
+document.getElementById('configure-shiftup-btn')?.addEventListener('click', () => beginCalibration('shiftUp'));
+document.getElementById('configure-shiftdown-btn')?.addEventListener('click', () => beginCalibration('shiftDown'));
+document.getElementById('save-gamepad-btn')?.addEventListener('click', () => {
+  saveGamepadConfig();
+  controlsPanelEl.classList.remove('visible');
+});
+
+toggleGamepadDebugBtn?.addEventListener('click', () => {
+  toggleGamepadDebugPanel();
+});
+
+window.addEventListener('gamepadconnected', () => {
+  setControlButtonState();
+  updateControlsPanelUi();
+  updateGamepadDebugPanel();
+});
+
+window.addEventListener('gamepaddisconnected', () => {
+  // Limpa o cache de inferência automática: quando outro (ou o mesmo)
+  // gamepad reconectar, os eixos/botões precisam ser reinferidos do zero.
+  cachedInferredDefaults = null;
+  cachedInferredPadId = null;
+  setControlButtonState();
+  updateControlsPanelUi();
+  updateGamepadDebugPanel();
+});
 
 window.addEventListener('keydown', (e) => {
   // SPACE é tratado separadamente (e.code, não e.key) para não depender de
@@ -1151,6 +1778,27 @@ function updateCar(dt) {
     rollingResistance,
   } = CAR_PHYSICS;
 
+  updateGamepadInput();
+  updateCalibration();
+
+  const useGamepadForSteering = controls.gamepadActive && gamepadConfig.steeringAxis !== null;
+  const useGamepadForThrottle = controls.gamepadActive && gamepadConfig.throttleAxis !== null;
+  const useGamepadForBrake = controls.gamepadActive && gamepadConfig.brakeAxis !== null;
+
+  const steeringInput = useGamepadForSteering ? controls.steering : (keys.a ? -1 : 0) + (keys.d ? 1 : 0);
+  const throttleInput = useGamepadForThrottle ? controls.throttle : (keys.w ? 1 : 0);
+  const brakeInput = useGamepadForBrake ? controls.brake : (keys.s ? 1 : 0);
+  const handbrakePressed = keys.space || (useGamepadForSteering && controls.handbrake);
+
+  if (controls.gamepadActive && controls.shiftUp && !previousGamepadShiftUp) {
+    shiftUp();
+  }
+  if (controls.gamepadActive && controls.shiftDown && !previousGamepadShiftDown) {
+    shiftDown();
+  }
+  previousGamepadShiftUp = controls.gamepadActive && controls.shiftUp;
+  previousGamepadShiftDown = controls.gamepadActive && controls.shiftDown;
+
   const NEAR_STOP_SPEED = 1.0; // unid/s (~3.6 km/h) — "praticamente parado"
 
   // -------------------------------------------------------------------
@@ -1175,7 +1823,8 @@ function updateCar(dt) {
   const gearMaxSpeedUnid = kmhToUnid(gearCfg.maxSpeed);
   const gearPower = carState.gear === REVERSE_GEAR ? 1 : gearCfg.power ?? 1;
 
-  if (keys.w) {
+  if (throttleInput > 0.02 || keys.w) {
+    const effectiveThrottle = throttleInput > 0.02 ? throttleInput : 1;
     if (carState.gear === REVERSE_GEAR) {
       if (Math.abs(longitudinal) < NEAR_STOP_SPEED) {
         // Praticamente parado: volta para a 1ª marcha em vez de continuar
@@ -1183,7 +1832,7 @@ function updateCar(dt) {
         carState.gear = 1;
       } else {
         // Ainda recuando: W funciona como o freio da ré.
-        longitudinal = Math.min(0, longitudinal + brakeStrength * dt);
+        longitudinal = Math.min(0, longitudinal + brakeStrength * effectiveThrottle * dt);
       }
     } else {
       // Acelerando para frente na marcha atual. A força cai suavemente
@@ -1192,11 +1841,12 @@ function updateCar(dt) {
       // motor realmente "acabando o fôlego" no fim daquela relação.
       const speedFraction = THREE.MathUtils.clamp(longitudinal / gearMaxSpeedUnid, 0, 1);
       const taper = carState.rpmLimiterActive ? 0 : Math.pow(1 - speedFraction, 1.6);
-      longitudinal += acceleration * gearPower * taper * dt;
+      longitudinal += acceleration * gearPower * taper * effectiveThrottle * dt;
     }
-  } else if (keys.s) {
+  } else if (brakeInput > 0.02 || keys.s) {
+    const effectiveBrake = brakeInput > 0.02 ? brakeInput : 1;
     if (carState.gear !== REVERSE_GEAR && longitudinal > 0.05) {
-      longitudinal -= brakeStrength * dt; // freando enquanto anda para frente
+      longitudinal -= brakeStrength * effectiveBrake * dt; // freando enquanto anda para frente
     } else {
       if (carState.gear !== REVERSE_GEAR && Math.abs(longitudinal) < NEAR_STOP_SPEED) {
         // Praticamente parado: entra em ré.
@@ -1209,7 +1859,7 @@ function updateCar(dt) {
           1
         );
         const reverseTaper = carState.rpmLimiterActive ? 0 : Math.pow(1 - reverseFraction, 1.6);
-        longitudinal -= reverseAcceleration * reverseTaper * dt; // dando ré
+        longitudinal -= reverseAcceleration * effectiveBrake * reverseTaper * dt; // dando ré
       }
     }
   } else {
@@ -1223,7 +1873,7 @@ function updateCar(dt) {
 
   // Freio de mão: além de soltar a aderência lateral (abaixo), também reduz
   // a velocidade longitudinal gradualmente.
-  if (keys.space) {
+  if (handbrakePressed) {
     if (longitudinal > 0) {
       longitudinal = Math.max(0, longitudinal - handbrakeBrake * dt);
     } else if (longitudinal < 0) {
@@ -1292,7 +1942,7 @@ function updateCar(dt) {
   //    difícil em curvas fechadas em alta velocidade). Com o freio de mão,
   //    a aderência cai bastante e a traseira escorrega, criando o drift.
   // -------------------------------------------------------------------
-  const gripCoefficient = keys.space ? handbrakeGrip : lateralGrip;
+  const gripCoefficient = handbrakePressed ? handbrakeGrip : lateralGrip;
   const gripFactor = 1 - Math.exp(-gripCoefficient * dt); // independente de FPS
   lateral -= lateral * gripFactor;
 
@@ -1310,13 +1960,21 @@ function updateCar(dt) {
   );
   const turnDirection = longitudinal >= 0 ? 1 : -1; // inverte esterço na ré
   let turnRate = steeringStrength * speedFactor;
-  if (keys.space) turnRate *= driftControl;
+  if (handbrakePressed) turnRate *= driftControl;
 
-  if (keys.a) {
-    carState.heading += turnRate * turnDirection * dt;
-  }
-  if (keys.d) {
-    carState.heading -= turnRate * turnDirection * dt;
+  if (useGamepadForSteering) {
+    const steeringMagnitude = Math.abs(steeringInput);
+    if (steeringMagnitude > 0.01) {
+      const steeringDirection = steeringInput > 0 ? -1 : 1;
+      carState.heading += turnRate * steeringMagnitude * steeringDirection * turnDirection * dt;
+    }
+  } else {
+    if (keys.a) {
+      carState.heading += turnRate * turnDirection * dt;
+    }
+    if (keys.d) {
+      carState.heading -= turnRate * turnDirection * dt;
+    }
   }
 
   // -------------------------------------------------------------------
@@ -1339,7 +1997,16 @@ function updateCar(dt) {
 
   carState.longitudinalSpeed = longitudinal;
   carState.lateralSpeed = lateral;
-  carState.isDrifting = keys.space && Math.abs(lateral) > 1.2;
+
+  // Marca de pneu no esterço máximo: mesmo sem o freio de mão, se o volante
+  // (ou A/D) estiver girado no limite e o carro estiver em movimento, os
+  // pneus deixam marca — como se estivessem raspando no esterço máximo.
+  const steeringMagnitudeForSkid = Math.min(Math.abs(steeringInput), 1);
+  const isMaxSteerSkid =
+    steeringMagnitudeForSkid >= CAR_PHYSICS.maxSteerSkidThreshold &&
+    Math.abs(longitudinal) > CAR_PHYSICS.maxSteerSkidMinSpeed;
+
+  carState.isDrifting = (handbrakePressed && Math.abs(lateral) > 1.2) || isMaxSteerSkid;
 
   // -------------------------------------------------------------------
   // 6) Atualiza posição com o vetor de velocidade real (não apenas um

@@ -367,6 +367,219 @@
       max-width: 560px;
     }
 
+    .control-actions {
+      display: flex;
+      justify-content: center;
+      gap: 12px;
+      margin-top: 18px;
+      flex-wrap: wrap;
+    }
+
+    .action-btn,
+    .secondary-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 42px;
+      padding: 10px 18px;
+      border-radius: 10px;
+      border: 1px solid rgba(255,255,255,0.12);
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0.03em;
+      cursor: pointer;
+      transition: transform 0.12s ease, filter 0.12s ease, border-color 0.12s ease;
+    }
+
+    .action-btn {
+      background: var(--accent);
+      color: #ffffff;
+      border-color: rgba(255,255,255,0.15);
+    }
+
+    .secondary-btn {
+      background: rgba(255,255,255,0.04);
+      color: #ffffff;
+    }
+
+    .action-btn:hover,
+    .secondary-btn:hover {
+      transform: translateY(-1px);
+      filter: brightness(1.08);
+    }
+
+    #controls-panel {
+      position: absolute;
+      inset: 0;
+      z-index: 60;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      background: rgba(10,12,16,0.72);
+      backdrop-filter: blur(6px);
+    }
+
+    #controls-panel.visible {
+      display: flex;
+    }
+
+    .controls-modal {
+      width: min(680px, 100%);
+      background: #131821;
+      border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 16px;
+      box-shadow: 0 18px 48px rgba(0,0,0,0.38);
+      color: #ffffff;
+      overflow: hidden;
+    }
+
+    .controls-header {
+      padding: 18px 22px;
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+      font-size: clamp(18px, 3vw, 26px);
+      font-weight: 800;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      text-align: center;
+      background: rgba(255,255,255,0.03);
+    }
+
+    .controls-body {
+      padding: 20px 22px 18px;
+      display: grid;
+      gap: 12px;
+    }
+
+    .config-row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 10px;
+      align-items: center;
+      padding: 10px 12px;
+      border-radius: 10px;
+      background: rgba(255,255,255,0.02);
+      border: 1px solid rgba(255,255,255,0.05);
+    }
+
+    .config-row span {
+      color: rgba(255,255,255,0.82);
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    .config-row strong {
+      color: #ffffff;
+      font-size: 13px;
+      font-weight: 700;
+      text-align: right;
+    }
+
+    .config-actions {
+      display: flex;
+      justify-content: center;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 8px;
+    }
+
+    .config-button {
+      background: rgba(255,255,255,0.04);
+      color: #ffffff;
+      border: 1px solid rgba(255,255,255,0.12);
+      padding: 10px 14px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-weight: 700;
+    }
+
+    .config-button.primary {
+      background: var(--accent);
+      border-color: rgba(255,255,255,0.12);
+    }
+
+    #gamepad-debug-panel {
+      position: absolute;
+      left: 18px;
+      bottom: 150px;
+      z-index: 35;
+      display: none;
+      min-width: min(360px, calc(100vw - 36px));
+      max-width: min(420px, calc(100vw - 36px));
+      padding: 12px 12px 10px;
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,0.12);
+      background: rgba(10, 12, 18, 0.82);
+      backdrop-filter: blur(8px);
+      box-shadow: 0 16px 34px rgba(0,0,0,0.26);
+      color: #fff;
+      pointer-events: none;
+    }
+
+    #gamepad-debug-panel.visible {
+      display: block;
+    }
+
+    .debug-title {
+      font-size: 11px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: #a9d7ff;
+      font-weight: 800;
+      margin-bottom: 8px;
+    }
+
+    .debug-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 6px 8px;
+      font-size: 11px;
+      line-height: 1.3;
+    }
+
+    .debug-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 4px 6px;
+      border-radius: 6px;
+      background: rgba(255,255,255,0.03);
+      border: 1px solid rgba(255,255,255,0.04);
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+
+    .debug-item strong {
+      color: #dbe8ff;
+      font-weight: 700;
+      min-width: 20px;
+    }
+
+    .meter {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      color: rgba(255,255,255,0.8);
+      margin-top: 2px;
+    }
+
+    .meter-bar {
+      flex: 1;
+      height: 10px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.08);
+      overflow: hidden;
+      border: 1px solid rgba(255,255,255,0.08);
+    }
+
+    .meter-fill {
+      height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, #3ddc84, #f2c245 70%, #ff5a36 92%);
+      width: 0%;
+    }
+
     @media (max-width: 720px) {
       #car-select {
         justify-content: flex-start;
@@ -521,6 +734,45 @@
       </div>
 
       <p class="footnote">Dica: use W A S D para dirigir e arraste o mouse para olhar ao redor</p>
+
+      <div class="control-actions">
+        <button id="controls-btn" class="secondary-btn" type="button">CONTROLES</button>
+      </div>
+    </div>
+
+    <div id="controls-panel" aria-modal="true" role="dialog">
+      <div class="controls-modal">
+        <div class="controls-header">Configuração do volante</div>
+        <div class="controls-body">
+          <div class="config-row"><span>Dispositivo</span><strong id="gamepad-device-name">Nenhum</strong></div>
+
+          <div class="config-row"><span>Volante</span><strong id="gamepad-wheel-label">Aguardando movimento...</strong></div>
+          <div class="meter"><span>Valor</span><div class="meter-bar"><div id="wheel-meter" class="meter-fill"></div></div><strong id="wheel-meter-value">0.00</strong></div>
+
+          <div class="config-row"><span>Acelerador</span><strong id="gamepad-throttle-label">Aguardando movimento...</strong></div>
+          <div class="meter"><span>Valor</span><div class="meter-bar"><div id="throttle-meter" class="meter-fill"></div></div><strong id="throttle-meter-value">0.00</strong></div>
+
+          <div class="config-row"><span>Freio</span><strong id="gamepad-brake-label">Aguardando movimento...</strong></div>
+          <div class="meter"><span>Valor</span><div class="meter-bar"><div id="brake-meter" class="meter-fill"></div></div><strong id="brake-meter-value">0.00</strong></div>
+
+          <div class="config-row"><span>Marcha +</span><strong id="gamepad-shiftup-label">Aguardando botão...</strong></div>
+          <div class="config-row"><span>Marcha -</span><strong id="gamepad-shiftdown-label">Aguardando botão...</strong></div>
+
+          <div class="config-actions">
+            <button class="config-button primary" id="configure-wheel-btn" type="button">Configurar volante</button>
+            <button class="config-button primary" id="configure-throttle-btn" type="button">Configurar acelerador</button>
+            <button class="config-button primary" id="configure-brake-btn" type="button">Configurar freio</button>
+          </div>
+          <div class="config-actions">
+            <button class="config-button" id="configure-shiftup-btn" type="button">Configurar marcha +</button>
+            <button class="config-button" id="configure-shiftdown-btn" type="button">Configurar marcha -</button>
+            <button class="config-button" id="save-gamepad-btn" type="button">Salvar configuração</button>
+          </div>
+          <div class="config-actions">
+            <button class="config-button" id="toggle-gamepad-debug-btn" type="button">Debug do volante</button>
+          </div>
+        </div>
+      </div>
     </div>
 
     <div id="loading">Carregando modelo do carro...</div>
@@ -545,6 +797,11 @@
     <div id="controls-hint">
       W acelerar &nbsp;|&nbsp; S ré/frear &nbsp;|&nbsp; A esquerda &nbsp;|&nbsp; D direita &nbsp;|&nbsp; SPACE freio de mão &nbsp;|&nbsp; E sobe marcha &nbsp;|&nbsp; Q reduz marcha
     </div>
+    <div id="gamepad-debug-panel" aria-live="polite">
+      <div class="debug-title">Gamepad debug</div>
+      <div id="gamepad-debug-grid" class="debug-grid"></div>
+    </div>
+
     <div id="touch-controls" aria-label="Controles de toque">
       <div class="touch-cluster touch-cluster-left" aria-label="Direção">
         <button class="touch-btn" type="button" data-key="a" aria-label="Virar para esquerda">←</button>
