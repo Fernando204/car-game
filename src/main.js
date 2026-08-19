@@ -428,6 +428,43 @@ const CAR_CATALOG = {
     rotationY: 1.6,
     targetLength: 4.3,
   },
+  porsche: {
+    modelPath: './assets/porsche.glb',
+    rotationX: 0,
+    // Ajuste este valor (radianos) se a frente do Porsche não apontar para
+    // o sentido de movimento ao acelerar.
+    rotationY: Math.PI / 2,
+    targetLength: 4.4,
+
+    // ---------------------------------------------------------------------
+    // "Passageiro" fixo no banco do motorista (a Mel). Opcional: um carro
+    // sem essa chave simplesmente não carrega nenhum bichinho.
+    // ---------------------------------------------------------------------
+    driverPet: {
+      modelPath: './assets/mel.glb',
+      // Altura real da Mel sentada (do chão até a ponta da orelha), em
+      // metros — usada para normalizar a escala do modelo, do mesmo jeito
+      // que targetLength normaliza o comprimento do carro.
+      height: 0.28,
+      // O modelo da Mel já "olha" para o mesmo eixo que é a frente do
+      // carro depois de virar filha do grupo `car` — então rotationY
+      // normalmente fica em 0. Se ao testar ela aparecer de lado ou de
+      // costas, ajuste este valor (radianos) em passos de Math.PI / 2.
+      rotationY: 0,
+      // Posição do banco do motorista dentro do habitáculo, em metros,
+      // relativa ao centro do grupo `car` (mesmo espaço/escala em que o
+      // corpo do carro é desenhado — x/z em metros reais, sem precisar
+      // reconverter nada).
+      //   x: negativo = lado esquerdo do carro (motorista, volante à
+      //      esquerda); positivo = lado direito.
+      //   y: altura do banco (onde as patas/traseira da Mel encostam).
+      //   z: positivo = mais perto do para-brisa/frente do carro;
+      //      negativo = mais perto do banco traseiro/tampa do porta-malas.
+      // Estes três números são a ÚNICA coisa que você provavelmente vai
+      // precisar ajustar visualmente (veja instruções no chat).
+      seat: { x: -0.35, y: 0.42, z: -0.2 },
+    },
+  },
 };
 
 const car = new THREE.Group();
@@ -686,6 +723,9 @@ const CAR_PHYSICS = {
 
 const loader = new GLTFLoader();
 let carModel = null;
+// Modelo do "passageiro" fixo no banco do motorista (ex.: a Mel), quando o
+// carro atual tiver um `driverPet` configurado no CAR_CATALOG.
+let petModel = null;
 let isGameStarted = false;
 const AUTO_SHIFT_COOLDOWN_MS = 500;
 let lastAutoShiftAt = 0;
@@ -743,6 +783,11 @@ function loadCar(carKey) {
       car.add(carModel);
       loadingEl.style.display = 'none';
 
+      // Carrega (ou remove, se o novo carro não tiver um) o passageiro fixo
+      // no banco do motorista. Feito depois do carModel para a Mel ficar
+      // desenhada por cima/à frente dele na hierarquia da cena.
+      loadDriverPet(config);
+
       resetCar();
       startGame();
     },
@@ -751,6 +796,71 @@ function loadCar(carKey) {
       console.error(`Erro ao carregar ${config.modelPath}:`, error);
       loadingEl.textContent =
         'Erro ao carregar o modelo do carro. Verifique se o arquivo está na pasta assets/.';
+    }
+  );
+}
+
+// -----------------------------------------------------------------------
+// Passageiro fixo no banco do motorista (ex.: a Mel)
+// -----------------------------------------------------------------------
+// Usa exatamente a mesma técnica de normalização do loadCar(): rotaciona
+// primeiro, mede a caixa (Box3) do modelo já rotacionado para descobrir o
+// tamanho real dele, escala para bater com a altura desejada e só então
+// posiciona — assim o resultado não depende de como o .glb original foi
+// modelado/orientado.
+//
+// A Mel é adicionada como FILHA do grupo `car` (o mesmo grupo que já
+// recebe toda a física/movimento em updateCar()/no game loop, via
+// `car.position.copy(...)` e `car.rotation.y = ...`). Isso é o que faz ela
+// se mover, virar, acelerar e derrapar exatamente junto com o carro sem
+// precisar tocar em nenhuma linha da física, dos controles ou da câmera.
+function loadDriverPet(config) {
+  // Remove o passageiro anterior (troca de carro, ex. Porsche -> Mustang).
+  if (petModel) {
+    car.remove(petModel);
+    petModel = null;
+  }
+
+  const petConfig = config.driverPet;
+  if (!petConfig) return; // este carro não tem passageiro configurado
+
+  loader.load(
+    petConfig.modelPath,
+    (gltf) => {
+      const pet = gltf.scene;
+
+      pet.rotation.y = petConfig.rotationY ?? 0;
+
+      pet.traverse((child) => {
+        if (child.isMesh) {
+          child.castShadow = true;
+          child.receiveShadow = true;
+        }
+      });
+
+      // Normaliza a escala com base na altura real desejada (ver comentário
+      // de `height` no CAR_CATALOG).
+      const box = new THREE.Box3().setFromObject(pet);
+      const size = new THREE.Vector3();
+      box.getSize(size);
+      if (size.y > 0) {
+        const scale = petConfig.height / size.y;
+        pet.scale.setScalar(scale);
+      }
+
+      // Alinha a base (patas/traseira) exatamente com a altura do banco:
+      // mede o Y mínimo já escalado e desloca para que ele encoste em
+      // petConfig.seat.y, do mesmo jeito que o carro "gruda" no chão.
+      const groundedBox = new THREE.Box3().setFromObject(pet);
+      const seat = petConfig.seat;
+      pet.position.set(seat.x, seat.y - groundedBox.min.y, seat.z);
+
+      car.add(pet);
+      petModel = pet;
+    },
+    undefined,
+    (error) => {
+      console.error(`Erro ao carregar o passageiro (${petConfig.modelPath}):`, error);
     }
   );
 }

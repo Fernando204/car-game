@@ -87,10 +87,53 @@ function buildCarModel(carKey, group) {
       model.position.y -= groundedBox.min.y;
 
       group.add(model);
+
+      // Mesma lógica do carro local (ver loadDriverPet em main.js): se
+      // este carro tiver um passageiro fixo configurado (ex.: a Mel no
+      // Porsche), carrega e prende ele no grupo do carro remoto, que já é
+      // interpolado/movido pelo tick() abaixo — sem lógica extra.
+      buildDriverPet(config, group);
     },
     undefined,
     (error) => {
       console.error(`Erro ao carregar carro remoto (${carKey}):`, error);
+    }
+  );
+}
+
+function buildDriverPet(config, group) {
+  const petConfig = config.driverPet;
+  if (!petConfig) return;
+
+  gltfLoader.load(
+    petConfig.modelPath,
+    (gltf) => {
+      const pet = gltf.scene;
+      pet.rotation.y = petConfig.rotationY ?? 0;
+
+      pet.traverse((child) => {
+        if (child.isMesh) {
+          child.castShadow = true;
+          child.receiveShadow = true;
+        }
+      });
+
+      const box = new THREE.Box3().setFromObject(pet);
+      const size = new THREE.Vector3();
+      box.getSize(size);
+      if (size.y > 0) {
+        pet.scale.setScalar(petConfig.height / size.y);
+      }
+
+      const groundedBox = new THREE.Box3().setFromObject(pet);
+      const seat = petConfig.seat;
+      pet.position.set(seat.x, seat.y - groundedBox.min.y, seat.z);
+
+      group.add(pet);
+    },
+    undefined,
+    (error) => {
+      console.error(`Erro ao carregar passageiro remoto (${petConfig.modelPath}):`, error);
     }
   );
 }
